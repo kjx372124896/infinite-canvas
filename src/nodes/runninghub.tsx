@@ -125,7 +125,6 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const runControllerRef = useRef<AbortController | null>(null);
   const remoteCancelConfirmedRef = useRef(false);
   const seenConnectionIdsRef = useRef<Set<string>>(new Set());
-  const manualConnectionSourcesRef = useRef<Set<string>>(new Set());
 
   const selectedApp = objectMetadata<RunningHubSavedApp | null>(ctx.node.metadata?.rhApp, null as RunningHubSavedApp | null);
   const values = objectMetadata<Values>(ctx.node.metadata?.rhValues, {});
@@ -134,10 +133,30 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const lastTaskId = stringMetadata(ctx.node.metadata?.rhTaskId);
   const lastStatus = stringMetadata(ctx.node.metadata?.rhTaskStatus);
   const persistedError = stringMetadata(ctx.node.metadata?.rhError);
-  const upstream = ctx.getUpstream();
   const allNodes = ctx.getNodes();
   const incomingConnections = ctx.getConnections().filter((connection) => connection.toNodeId === ctx.node.id);
   const incomingConnectionSignature = incomingConnections.map((connection) => connection.id).join("|");
+
+  const expandConnectedSource = (source: CanvasNodeData | null) => {
+    if (!source) return [] as CanvasNodeData[];
+    if (source.type !== "group") return [source];
+    return allNodes.filter((node) => node.metadata?.groupId === source.id && canvasNodeResourceKind(node) !== null);
+  };
+
+  const connectedInputNodes = (() => {
+    const nodes: CanvasNodeData[] = [];
+    const seen = new Set<string>();
+    for (const connection of incomingConnections) {
+      const source = ctx.getNode(connection.fromNodeId);
+      for (const node of expandConnectedSource(source)) {
+        if (seen.has(node.id)) continue;
+        seen.add(node.id);
+        nodes.push(node);
+      }
+    }
+    return nodes;
+  })();
+  const connectedInputNodeIds = new Set(connectedInputNodes.map((node) => node.id));
 
   const refreshLibrary = async () => {
     const nextApps = await loadRunningHubApps(ctx.storage);
@@ -179,12 +198,12 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     const seen = seenConnectionIdsRef.current;
     const nextBindings = { ...bindings };
     const nextModes = { ...bindingModes };
-    const connectedSourceIds = new Set(incomingConnections.map((connection) => connection.fromNodeId));
+    const connectedSourceIds = new Set(connectedInputNodeIds);
     let cleared = 0;
     let assigned = 0;
 
     for (const [fieldKey, sourceId] of Object.entries(nextBindings)) {
-      if (connectedSourceIds.has(sourceId) || manualConnectionSourcesRef.current.has(sourceId)) continue;
+      if (connectedSourceIds.has(sourceId)) continue;
       delete nextBindings[fieldKey];
       delete nextModes[fieldKey];
       cleared += 1;
@@ -193,22 +212,21 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     for (const connection of incomingConnections) {
       if (seen.has(connection.id)) continue;
       seen.add(connection.id);
-      const source = ctx.getNode(connection.fromNodeId);
-      if (!source) continue;
-      if (manualConnectionSourcesRef.current.has(source.id)) {
-        manualConnectionSourcesRef.current.delete(source.id);
-        continue;
+      const directSource = ctx.getNode(connection.fromNodeId);
+      if (!directSource) continue;
+      const sources = expandConnectedSource(directSource);
+      for (const source of sources) {
+        if (Object.values(nextBindings).includes(source.id)) continue;
+        const field = selectedApp.fields.find((candidate) =>
+          autoBindableField(candidate)
+          && compatibleKind(candidate.kind, source)
+          && !nextBindings[candidate.key]
+        );
+        if (!field) continue;
+        nextBindings[field.key] = source.id;
+        nextModes[field.key] = "auto";
+        assigned += 1;
       }
-      if (Object.values(nextBindings).includes(source.id)) continue;
-      const field = selectedApp.fields.find((candidate) =>
-        autoBindableField(candidate)
-        && compatibleKind(candidate.kind, source)
-        && !nextBindings[candidate.key]
-      );
-      if (!field) continue;
-      nextBindings[field.key] = source.id;
-      nextModes[field.key] = "auto";
-      assigned += 1;
     }
 
     seenConnectionIdsRef.current = new Set(incomingConnections.map((connection) => connection.id));
@@ -419,10 +437,6 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
       delete nextModes[field.key];
     }
     ctx.updateMetadata({ rhBindings: nextBindings, rhBindingModes: nextModes });
-    if (nodeId && !ctx.getConnections().some((connection) => connection.fromNodeId === nodeId && connection.toNodeId === ctx.node.id)) {
-      manualConnectionSourcesRef.current.add(nodeId);
-      ctx.applyOps([{ type: "connect_nodes", fromNodeId: nodeId, toNodeId: ctx.node.id }]);
-    }
   };
 
   const resolveFieldValue = async (field: RunningHubField, apiKey: string, signal: AbortSignal) => {
@@ -639,9 +653,15 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     background: ctx.theme.node.fill,
   };
 
-  const fieldNodeOptions = (field: RunningHubField) => allNodes
-    .filter((node) => node.id !== ctx.node.id && compatibleKind(field.kind, node))
-    .sort((a, b) => Number(upstream.some((item) => item.id === b.id)) - Number(upstream.some((item) => item.id === a.id)));
+  const fieldNodeOptions = (field: RunningHubField) =>
+    connectedInputNodes.filter((node) => compatibleKind(field.kind, node));
+
+  const connectedInputLabel = (node: CanvasNodeData) => {
+    const groupId = node.metadata?.groupId;
+    if (!groupId || !incomingConnections.some((connection) => connection.fromNodeId === groupId)) return node.title;
+    const group = ctx.getNode(groupId);
+    return group ? group.title + " / " + node.title : node.title;
+  };
 
   const portDot = (field: RunningHubField, bindingId: string) => (
     <span
@@ -673,7 +693,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
         <option value="">未绑定</option>
         {nodeOptions.map((node) => (
           <option key={node.id} value={node.id}>
-            {upstream.some((item) => item.id === node.id) ? "已连接 · " : ""}{node.title}
+            {connectedInputLabel(node)}
           </option>
         ))}
       </select>
