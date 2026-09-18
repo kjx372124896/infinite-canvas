@@ -960,7 +960,6 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
 
   return (
     <div
-      data-canvas-no-zoom
       onPointerDown={(event) => {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("input,textarea,select,button,label,[data-rh-interactive]")) event.stopPropagation();
@@ -969,13 +968,12 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("input,textarea,select,button,label,[data-rh-interactive]")) event.stopPropagation();
       }}
-      onWheel={(event) => event.stopPropagation()}
       style={{
         width: "100%",
         height: "100%",
         boxSizing: "border-box",
         padding: 12,
-        overflow: "auto",
+        overflow: "visible",
         color: ctx.theme.node.text,
         fontFamily: "Inter, system-ui, sans-serif",
       }}
