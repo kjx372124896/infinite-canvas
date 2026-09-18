@@ -14,16 +14,16 @@ export async function startMcpServer() {
 }
 
 /** 创建一份共享同一套画布工具定义的 MCP Server，供 stdio / HTTP transport 复用。 */
-export function createCanvasMcpServer(config: CanvasAgentConfig) {
+export function createCanvasMcpServer(config: CanvasAgentConfig, toolMeta?: Record<string, unknown>) {
     const server = new McpServer({ name: "canvas-agent", version: VERSION }, { instructions: AGENT_PROMPT });
-    toolNames.forEach((name) => registerCanvasTool(server, config, name));
+    toolNames.forEach((name) => registerCanvasTool(server, config, name, toolMeta));
     return server;
 }
 
 /** 向 MCP Server 注册单个 Canvas Agent 工具。 */
-function registerCanvasTool(server: McpServer, config: CanvasAgentConfig, name: ToolName) {
+function registerCanvasTool(server: McpServer, config: CanvasAgentConfig, name: ToolName, toolMeta?: Record<string, unknown>) {
     const schema = toolInputSchemas[name];
-    server.registerTool(name, { description: toolDescriptions[name], inputSchema: schema.shape }, async (input: unknown) => {
+    server.registerTool(name, { description: toolDescriptions[name], inputSchema: schema.shape, ...(toolMeta ? { _meta: toolMeta } : {}) }, async (input: unknown) => {
         const result = await postCanvasAgentTool(config, name, schema.parse(input));
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     });

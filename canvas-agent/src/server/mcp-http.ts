@@ -9,6 +9,7 @@ import { createCanvasMcpServer } from "./mcp.js";
 
 const DEFAULT_REMOTE_MCP_PORT = 17372;
 const DEFAULT_REMOTE_MCP_PATH = "/mcp";
+type RemoteMcpAuthMode = "token" | "none";
 
 /**
  * 启动供 ChatGPT / 远程 MCP 客户端使用的 Streamable HTTP MCP。
@@ -22,7 +23,8 @@ export async function startRemoteMcpServer() {
     const port = positivePort(process.env.CANVAS_MCP_PORT) || DEFAULT_REMOTE_MCP_PORT;
     const endpointPath = normalizePath(process.env.CANVAS_MCP_PATH || DEFAULT_REMOTE_MCP_PATH);
     const token = process.env.CANVAS_MCP_TOKEN?.trim() || config.token;
-    const app = createRemoteMcpApp(config, token, host, endpointPath);
+    const authMode: RemoteMcpAuthMode = process.env.CANVAS_MCP_AUTH?.trim().toLowerCase() === "none" ? "none" : "token";
+    const app = createRemoteMcpApp(config, token, host, endpointPath, authMode);
 
     app.listen(port, host, (error?: Error) => {
         if (error) {
@@ -34,14 +36,18 @@ export async function startRemoteMcpServer() {
         console.log("Infinite Canvas Remote MCP");
         console.log(`Local MCP URL: ${localUrl}`);
         console.log(`Canvas Agent backend: ${config.url}`);
-        console.log("Auth: Bearer token, x-canvas-agent-token, or ?token=... (reuses the Canvas Agent connect token by default)");
-        console.log(`Secure MCP Tunnel target: ${localUrl}?token=${encodeURIComponent(token)}`);
+        if (authMode === "none") {
+            console.log("Auth: disabled (CANVAS_MCP_AUTH=none)");
+        } else {
+            console.log("Auth: Bearer token, x-canvas-agent-token, or ?token=... (reuses the Canvas Agent connect token by default)");
+            console.log(`Secure MCP Tunnel target: ${localUrl}?token=${encodeURIComponent(token)}`);
+        }
         console.log("This command does not modify or replace the existing Codex app-server / stdio MCP flow.");
     });
 }
 
 /** 构造可测试、可嵌入的 Remote MCP Express 应用。 */
-export function createRemoteMcpApp(config: CanvasAgentConfig, token: string, host = "127.0.0.1", endpointPath = DEFAULT_REMOTE_MCP_PATH) {
+export function createRemoteMcpApp(config: CanvasAgentConfig, token: string, host = "127.0.0.1", endpointPath = DEFAULT_REMOTE_MCP_PATH, authMode: RemoteMcpAuthMode = "token") {
     // The server still binds to loopback in startRemoteMcpServer(), but reverse proxies such as
     // Cloudflare Tunnel preserve the public Host header. Passing 0.0.0.0 here disables the SDK's
     // localhost-only Host check while token authentication remains mandatory for the MCP endpoint.
@@ -54,15 +60,16 @@ export function createRemoteMcpApp(config: CanvasAgentConfig, token: string, hos
             transport: "streamable-http",
             endpoint: endpointPath,
             canvasAgent: config.url,
+            auth: authMode,
         });
     });
 
     app.post(endpointPath, async (req, res) => {
-        if (!authorized(req, token)) return unauthorized(res);
+        if (authMode !== "none" && !authorized(req, token)) return unauthorized(res);
 
         // Each request gets an independent stateless transport. Canvas state itself remains in
         // the local Agent service, so remote clients never need access to the Agent HTTP API.
-        const server = createCanvasMcpServer(config);
+        const server = createCanvasMcpServer(config, authMode === "none" ? { securitySchemes: [{ type: "noauth" }] } : undefined);
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
 
         try {
@@ -85,12 +92,12 @@ export function createRemoteMcpApp(config: CanvasAgentConfig, token: string, hos
     });
 
     app.get(endpointPath, (req, res) => {
-        if (!authorized(req, token)) return unauthorized(res);
+        if (authMode !== "none" && !authorized(req, token)) return unauthorized(res);
         return methodNotAllowed(res);
     });
 
     app.delete(endpointPath, (req, res) => {
-        if (!authorized(req, token)) return unauthorized(res);
+        if (authMode !== "none" && !authorized(req, token)) return unauthorized(res);
         return methodNotAllowed(res);
     });
 

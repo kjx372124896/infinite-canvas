@@ -46,6 +46,32 @@ test("Remote MCP requires auth and exposes Canvas tools over Streamable HTTP", a
     assert.ok(names.length > 10);
 });
 
+test("Remote MCP noauth mode allows ChatGPT-style anonymous discovery", async (t) => {
+    const app = createRemoteMcpApp({ url: "http://127.0.0.1:9", token: "unused" }, "ignored-token", "127.0.0.1", "/mcp", "none");
+    const http = app.listen(0, "127.0.0.1");
+    await once(http, "listening");
+    t.after(() => new Promise<void>((resolve, reject) => http.close((error) => (error ? reject(error) : resolve()))));
+
+    const port = (http.address() as AddressInfo).port;
+    const endpoint = `http://127.0.0.1:${port}/mcp`;
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+
+    const initialized = await post(endpoint, headers, {
+        jsonrpc: "2.0",
+        id: 11,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "chatgpt-noauth-test", version: "1.0.0" } },
+    });
+    assert.equal(initialized.result?.serverInfo?.name, "canvas-agent");
+
+    const listed = await post(endpoint, headers, { jsonrpc: "2.0", id: 12, method: "tools/list", params: {} });
+    const tools = (listed.result?.tools || []) as Array<{ name: string; _meta?: { securitySchemes?: Array<{ type?: string }> } }>;
+    const names = tools.map((tool) => tool.name);
+    assert.ok(names.includes("canvas_get_state"));
+    assert.ok(names.includes("canvas_apply_ops"));
+    assert.deepEqual(tools.find((tool) => tool.name === "canvas_get_state")?._meta?.securitySchemes, [{ type: "noauth" }]);
+});
+
 async function post(endpoint: string, headers: Record<string, string>, payload: unknown) {
     const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
     assert.equal(response.status, 200);

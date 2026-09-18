@@ -114,13 +114,13 @@ npx -y @basketikun/canvas-agent@latest remote
 npm run dev:remote
 ```
 
-默认 MCP 地址为 `http://127.0.0.1:17372/mcp`。Remote MCP 默认复用 Canvas Agent Connect token，支持 Bearer Header、`x-canvas-agent-token` Header 和 `?token=` 查询参数。
+默认 MCP 地址为 `http://127.0.0.1:17372/mcp`。Remote MCP 默认复用 Canvas Agent Connect token，支持 Bearer Header、`x-canvas-agent-token` Header 和 `?token=` 查询参数。若只是开发阶段连接 ChatGPT 的“无身份验证”模式，可以设置 `CANVAS_MCP_AUTH=none`；此时 Remote MCP 会允许匿名调用，并为工具发布 `noauth` 安全元数据。
 
 推荐网页版 ChatGPT 使用 OpenAI Secure MCP Tunnel，只把这个 MCP 端点交给隧道，不要直接暴露 `17371` 的 Canvas Agent API。启动 `remote` 后终端会打印可给 tunnel-client 使用的本机目标地址。
 
 在网页版 ChatGPT 开发者模式中创建 MCP/插件连接时，在「连接」里选择「隧道」，再选择对应的 `tunnel_id`。这样 ChatGPT 使用的仍然是同一套 `canvas_*` 工具，而画布操作继续由本机 Canvas Agent 执行。
 
-可用环境变量：`CANVAS_MCP_HOST`、`CANVAS_MCP_PORT`、`CANVAS_MCP_PATH`、`CANVAS_MCP_TOKEN`。默认只监听回环地址；若自行公开到互联网，应使用符合 MCP/ChatGPT 要求的 OAuth，而不是只依赖 URL token。
+可用环境变量：`CANVAS_MCP_HOST`、`CANVAS_MCP_PORT`、`CANVAS_MCP_PATH`、`CANVAS_MCP_TOKEN`、`CANVAS_MCP_AUTH`。`CANVAS_MCP_AUTH` 默认为 `token`，设为 `none` 时关闭 Remote MCP 鉴权。默认只监听回环地址；通过 Cloudflare Tunnel 等公开 `noauth` 端点时，任何能访问该 URL 的客户端都可以调用画布写入工具，因此只建议用于可信测试环境，长期使用应改为 OAuth。
 
 如果希望终端里的 Codex 不被 MCP 审批卡住，可以在 `~/.codex/config.toml` 里给这个 MCP 设置自动放行：
 
