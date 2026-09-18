@@ -16,7 +16,6 @@ import {
   pollRunningHubTask,
   queryRunningHubTask,
   removeRunningHubCredential,
-  RUNNINGHUB_BASE_URL,
   saveRunningHubCredential,
   startRunningHubTask,
   type RunningHubCategory,
@@ -32,7 +31,7 @@ import {
 
 type Values = Record<string, unknown>;
 type Bindings = Record<string, string>;
-type UploadNames = Record<string, string>;
+type BindingModes = Record<string, "auto" | "manual">;
 
 const categoryLabel: Record<RunningHubCategory, string> = {
   image: "图片",
@@ -57,7 +56,12 @@ function initialValues(app: RunningHubSavedApp) {
 function compatibleKind(fieldKind: RunningHubFieldKind, node: CanvasNodeData) {
   const kind = canvasNodeResourceKind(node);
   if (fieldKind === "image" || fieldKind === "video" || fieldKind === "audio") return kind === fieldKind;
-  return kind === "text";
+  if (fieldKind === "text") return kind === "text";
+  return false;
+}
+
+function autoBindableField(field: RunningHubField) {
+  return field.kind === "image" || field.kind === "video" || field.kind === "audio" || field.kind === "text";
 }
 
 function filenameForBlob(blob: Blob, field: RunningHubField, sourceName?: string) {
@@ -117,15 +121,19 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const [pendingRefresh, setPendingRefresh] = useState<RunningHubSavedApp | null>(null);
   const [taskState, setTaskState] = useState<RunningHubTaskState | null>(null);
   const runControllerRef = useRef<AbortController | null>(null);
+  const seenConnectionIdsRef = useRef<Set<string>>(new Set());
+  const manualConnectionSourcesRef = useRef<Set<string>>(new Set());
 
   const selectedApp = objectMetadata<RunningHubSavedApp | null>(ctx.node.metadata?.rhApp, null as RunningHubSavedApp | null);
   const values = objectMetadata<Values>(ctx.node.metadata?.rhValues, {});
   const bindings = objectMetadata<Bindings>(ctx.node.metadata?.rhBindings, {});
-  const uploadNames = objectMetadata<UploadNames>(ctx.node.metadata?.rhUploadNames, {});
+  const bindingModes = objectMetadata<BindingModes>(ctx.node.metadata?.rhBindingModes, {});
   const lastTaskId = stringMetadata(ctx.node.metadata?.rhTaskId);
   const lastStatus = stringMetadata(ctx.node.metadata?.rhTaskStatus);
   const upstream = ctx.getUpstream();
   const allNodes = ctx.getNodes();
+  const incomingConnections = ctx.getConnections().filter((connection) => connection.toNodeId === ctx.node.id);
+  const incomingConnectionSignature = incomingConnections.map((connection) => connection.id).join("|");
 
   const refreshLibrary = async () => {
     const nextApps = await loadRunningHubApps(ctx.storage);
@@ -154,6 +162,71 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const current = ctx.getConnections().filter((connection) => connection.toNodeId === ctx.node.id);
+    seenConnectionIdsRef.current = new Set(current.map((connection) => connection.id));
+  }, [selectedApp?.id]);
+
+  useEffect(() => {
+    if (!selectedApp) {
+      seenConnectionIdsRef.current = new Set(incomingConnections.map((connection) => connection.id));
+      return;
+    }
+    const seen = seenConnectionIdsRef.current;
+    const nextBindings = { ...bindings };
+    const nextModes = { ...bindingModes };
+    const connectedSourceIds = new Set(incomingConnections.map((connection) => connection.fromNodeId));
+    let cleared = 0;
+    let assigned = 0;
+
+    for (const [fieldKey, sourceId] of Object.entries(nextBindings)) {
+      if (connectedSourceIds.has(sourceId) || manualConnectionSourcesRef.current.has(sourceId)) continue;
+      delete nextBindings[fieldKey];
+      delete nextModes[fieldKey];
+      cleared += 1;
+    }
+
+    for (const connection of incomingConnections) {
+      if (seen.has(connection.id)) continue;
+      seen.add(connection.id);
+      const source = ctx.getNode(connection.fromNodeId);
+      if (!source) continue;
+      if (manualConnectionSourcesRef.current.has(source.id)) {
+        manualConnectionSourcesRef.current.delete(source.id);
+        continue;
+      }
+      if (Object.values(nextBindings).includes(source.id)) continue;
+      const field = selectedApp.fields.find((candidate) =>
+        autoBindableField(candidate)
+        && compatibleKind(candidate.kind, source)
+        && !nextBindings[candidate.key]
+      );
+      if (!field) continue;
+      nextBindings[field.key] = source.id;
+      nextModes[field.key] = "auto";
+      assigned += 1;
+    }
+
+    seenConnectionIdsRef.current = new Set(incomingConnections.map((connection) => connection.id));
+    if (assigned > 0 || cleared > 0) {
+      ctx.updateMetadata({ rhBindings: nextBindings, rhBindingModes: nextModes });
+      if (assigned > 0) setNotice(`已按 RunningHub 参数顺序自动匹配 ${assigned} 个输入`);
+    }
+  }, [incomingConnectionSignature, selectedApp?.id]);
+
+  useEffect(() => {
+    if (!selectedApp || view !== "main") return;
+    const mediaCount = selectedApp.fields.filter((field) => field.kind === "image" || field.kind === "video" || field.kind === "audio").length;
+    const normalFields = selectedApp.fields.filter((field) => field.kind !== "image" && field.kind !== "video" && field.kind !== "audio");
+    const mediaRows = Math.ceil(mediaCount / 3);
+    const normalHeight = normalFields.reduce((sum, field) => sum + (field.kind === "text" ? 92 : 62), 0);
+    const targetWidth = 660;
+    const targetHeight = Math.max(420, 170 + mediaRows * 154 + normalHeight + 118);
+    if (ctx.node.width !== targetWidth || Math.abs(ctx.node.height - targetHeight) > 2) {
+      ctx.updateNode({ width: targetWidth, height: targetHeight });
+    }
+  }, [selectedApp?.schemaHash, selectedApp?.id, view]);
+
   const selectedLibraryId = selectedApp?.id || "";
   const matchingApps = useMemo(() => {
     const query = librarySearch.trim().toLowerCase();
@@ -179,7 +252,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
       rhApp: next,
       rhValues: initialValues(next),
       rhBindings: {},
-      rhUploadNames: {},
+      rhBindingModes: {},
       rhTaskId: "",
       rhTaskStatus: "",
       rhOutputKind: "",
@@ -313,11 +386,12 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
       nextValues[field.key] = field.key in values ? values[field.key] : field.defaultValue;
     }
     const nextBindings = Object.fromEntries(Object.entries(bindings).filter(([key]) => pendingRefresh.fields.some((field) => field.key === key)));
+    const nextBindingModes = Object.fromEntries(Object.entries(bindingModes).filter(([key]) => pendingRefresh.fields.some((field) => field.key === key)));
     ctx.updateMetadata({
       rhApp: pendingRefresh,
       rhValues: nextValues,
       rhBindings: nextBindings,
-      rhUploadNames: {},
+      rhBindingModes: nextBindingModes,
     });
     ctx.updateNode({ title: `RunningHub · ${pendingRefresh.name}` });
     setPendingRefresh(null);
@@ -329,34 +403,25 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   };
 
   const changeBinding = (field: RunningHubField, nodeId: string) => {
-    ctx.updateMetadata({ rhBindings: { ...bindings, [field.key]: nodeId } });
+    const nextBindings = { ...bindings };
+    const nextModes = { ...bindingModes };
+    if (nodeId) {
+      nextBindings[field.key] = nodeId;
+      nextModes[field.key] = "manual";
+    } else {
+      delete nextBindings[field.key];
+      delete nextModes[field.key];
+    }
+    ctx.updateMetadata({ rhBindings: nextBindings, rhBindingModes: nextModes });
     if (nodeId && !ctx.getConnections().some((connection) => connection.fromNodeId === nodeId && connection.toNodeId === ctx.node.id)) {
+      manualConnectionSourcesRef.current.add(nodeId);
       ctx.applyOps([{ type: "connect_nodes", fromNodeId: nodeId, toNodeId: ctx.node.id }]);
     }
-  };
-
-  const chooseUpload = async (field: RunningHubField, file: File | null) => {
-    if (!file) return;
-    const storageKey = `runninghub:node-upload:${ctx.node.id}:${field.key}`;
-    await ctx.storage.set(storageKey, file);
-    ctx.updateMetadata({ rhUploadNames: { ...uploadNames, [field.key]: file.name } });
-    setNotice(`已暂存 ${file.name}，生成时上传到 RunningHub`);
-  };
-
-  const clearUpload = async (field: RunningHubField) => {
-    await ctx.storage.remove(`runninghub:node-upload:${ctx.node.id}:${field.key}`);
-    const next = { ...uploadNames };
-    delete next[field.key];
-    ctx.updateMetadata({ rhUploadNames: next });
   };
 
   const resolveFieldValue = async (field: RunningHubField, apiKey: string, signal: AbortSignal) => {
     const bindingId = bindings[field.key];
     if (field.kind === "image" || field.kind === "video" || field.kind === "audio") {
-      const upload = await ctx.storage.get<Blob>(`runninghub:node-upload:${ctx.node.id}:${field.key}`);
-      if (upload instanceof Blob) {
-        return uploadRunningHubBlob(selectedApp!.site, apiKey, upload, filenameForBlob(upload, field, uploadNames[field.key]), signal);
-      }
       if (bindingId) {
         const source = ctx.getNode(bindingId);
         if (!source) throw new Error(`${field.label} 绑定的上游节点已经不存在`);
@@ -519,131 +584,169 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     .filter((node) => node.id !== ctx.node.id && compatibleKind(field.kind, node))
     .sort((a, b) => Number(upstream.some((item) => item.id === b.id)) - Number(upstream.some((item) => item.id === a.id)));
 
-  const renderField = (field: RunningHubField) => {
+  const portDot = (field: RunningHubField, bindingId: string) => (
+    <span
+      title={bindingId ? `${bindingModes[field.key] === "manual" ? "手动" : "自动"}绑定` : "等待上游连线"}
+      style={{
+        position: "absolute",
+        left: -7,
+        top: 18,
+        width: 12,
+        height: 12,
+        borderRadius: 999,
+        border: `2px solid ${ctx.theme.node.panel}`,
+        background: bindingId ? "#22c55e" : ctx.theme.node.muted,
+        boxShadow: `0 0 0 1px ${ctx.theme.node.stroke}`,
+        zIndex: 2,
+      }}
+    />
+  );
+
+  const bindingSelect = (field: RunningHubField, compact = false) => {
     const nodeOptions = fieldNodeOptions(field);
+    const bindingId = bindings[field.key] || "";
+    return (
+      <select
+        value={bindingId}
+        onChange={(event) => changeBinding(field, event.target.value)}
+        style={{ ...inputStyle, height: compact ? 28 : 30, padding: "0 7px", fontSize: 10 }}
+      >
+        <option value="">未绑定</option>
+        {nodeOptions.map((node) => (
+          <option key={node.id} value={node.id}>
+            {upstream.some((item) => item.id === node.id) ? "已连接 · " : ""}{node.title}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  const renderMediaField = (field: RunningHubField) => {
+    const bindingId = bindings[field.key] || "";
+    const boundNode = bindingId ? ctx.getNode(bindingId) : null;
+    const icon = field.kind === "image" ? "▣" : field.kind === "video" ? "▶" : "♪";
+    return (
+      <div
+        key={field.key}
+        style={{
+          position: "relative",
+          minHeight: 132,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          padding: "12px 10px 10px 14px",
+          border: `1px solid ${ctx.theme.node.stroke}`,
+          borderRadius: 12,
+          background: ctx.theme.node.panel,
+        }}
+      >
+        {portDot(field, bindingId)}
+        <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+          <span style={{ width: 22, height: 22, display: "grid", placeItems: "center", borderRadius: 7, background: ctx.theme.node.fill, fontSize: 11 }}>{icon}</span>
+          <strong style={{ minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
+            {field.label}{field.required ? " *" : ""}
+          </strong>
+        </div>
+        <div
+          title={boundNode?.title || "等待建立连线"}
+          style={{
+            minHeight: 42,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "6px 8px",
+            border: `1px dashed ${bindingId ? "#22c55e" : ctx.theme.node.stroke}`,
+            borderRadius: 9,
+            background: ctx.theme.node.fill,
+            color: bindingId ? ctx.theme.node.text : ctx.theme.node.muted,
+            fontSize: 10,
+            textAlign: "center",
+            overflow: "hidden",
+          }}
+        >
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {boundNode ? `${bindingModes[field.key] === "manual" ? "手动" : "自动"} · ${boundNode.title}` : "拖入连线后按顺序匹配"}
+          </span>
+        </div>
+        {bindingSelect(field, true)}
+      </div>
+    );
+  };
+
+  const renderNormalField = (field: RunningHubField) => {
     const value = values[field.key] ?? field.defaultValue;
     const bindingId = bindings[field.key] || "";
-    const media = field.kind === "image" || field.kind === "video" || field.kind === "audio";
+    const boundNode = bindingId ? ctx.getNode(bindingId) : null;
+    const bindable = field.kind === "text";
     return (
-      <div key={field.key} style={{ ...sectionStyle, display: "grid", gap: 6 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
-          <strong style={{ fontSize: 11 }}>{field.label}{field.required ? " *" : ""}</strong>
-          <span style={{ fontSize: 9, color: ctx.theme.node.muted }}>{field.nodeId}:{field.fieldName}</span>
+      <div
+        key={field.key}
+        style={{
+          position: "relative",
+          display: "grid",
+          gridTemplateColumns: bindable ? "140px minmax(0,1fr) 170px" : "140px minmax(0,1fr)",
+          gap: 10,
+          alignItems: field.kind === "text" ? "start" : "center",
+          minHeight: field.kind === "text" ? 82 : 52,
+          padding: "9px 10px 9px 14px",
+          border: `1px solid ${ctx.theme.node.stroke}`,
+          borderRadius: 10,
+          background: ctx.theme.node.panel,
+        }}
+      >
+        {bindable ? portDot(field, bindingId) : null}
+        <div style={{ minWidth: 0, paddingTop: field.kind === "text" ? 5 : 0 }}>
+          <strong style={{ display: "block", fontSize: 10.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{field.label}{field.required ? " *" : ""}</strong>
+          <span style={{ display: "block", marginTop: 2, fontSize: 8.5, color: ctx.theme.node.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{field.fieldName}</span>
         </div>
-        {field.description && field.description !== field.label ? <div style={{ fontSize: 9, color: ctx.theme.node.muted }}>{field.description}</div> : null}
 
-        {media ? (
-          <>
+        <div style={{ minWidth: 0 }}>
+          {field.kind === "select" ? (
             <select
-              value={bindingId}
-              onChange={(event) => changeBinding(field, event.target.value)}
-              style={{ ...inputStyle, height: 30, padding: "0 7px" }}
+              value={String(value ?? "")}
+              onChange={(event) => {
+                const option = field.options.find((item) => String(item.value) === event.target.value);
+                changeValue(field, option?.value ?? event.target.value);
+              }}
+              style={{ ...inputStyle, height: 32, padding: "0 8px" }}
             >
-              <option value="">不绑定上游（使用应用默认值）</option>
-              {nodeOptions.map((node) => <option key={node.id} value={node.id}>{upstream.some((item) => item.id === node.id) ? "已连接 · " : ""}{node.title}</option>)}
+              {field.options.map((option) => <option key={JSON.stringify(option.value)} value={String(option.value)}>{option.label}</option>)}
             </select>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <label style={{ flex: 1, cursor: "pointer", border: `1px dashed ${ctx.theme.node.stroke}`, borderRadius: 8, padding: "6px 8px", fontSize: 10, color: ctx.theme.node.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {uploadNames[field.key] || "选择本地文件"}
-                <input
-                  type="file"
-                  accept={field.kind === "image" ? "image/*" : field.kind === "video" ? "video/*" : "audio/*"}
-                  style={{ display: "none" }}
-                  onChange={(event) => void chooseUpload(field, event.target.files?.[0] || null)}
-                />
-              </label>
-              {uploadNames[field.key] ? <Button compact onClick={() => void clearUpload(field)}>清除</Button> : null}
-            </div>
-            {bindingId && uploadNames[field.key] ? <div style={{ fontSize: 9, color: "#f59e0b" }}>本地文件优先于上游绑定</div> : null}
-          </>
-        ) : (
-          <>
-            {nodeOptions.length ? (
-              <select
-                value={bindingId}
-                onChange={(event) => changeBinding(field, event.target.value)}
-                style={{ ...inputStyle, height: 28, padding: "0 7px" }}
-              >
-                <option value="">手动填写</option>
-                {nodeOptions.map((node) => <option key={node.id} value={node.id}>{upstream.some((item) => item.id === node.id) ? "已连接 · " : ""}{node.title}</option>)}
-              </select>
-            ) : null}
-            {!bindingId && field.kind === "select" ? (
-              field.options.length > 0
-              && field.options.length <= 10
-              && field.options.every((option) => option.label.length <= 48)
-                ? (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {field.options.map((option) => {
-                      const checked = Object.is(value, option.value) || String(value ?? "") === String(option.value);
-                      return (
-                        <label
-                          key={JSON.stringify(option.value)}
-                          title={option.description || option.label}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 5,
-                            minHeight: 28,
-                            padding: "4px 8px",
-                            border: `1px solid ${checked ? ctx.theme.toolbar.activeText : ctx.theme.node.stroke}`,
-                            borderRadius: 8,
-                            background: checked ? ctx.theme.toolbar.activeBg : ctx.theme.node.panel,
-                            color: checked ? ctx.theme.toolbar.activeText : ctx.theme.node.text,
-                            cursor: "pointer",
-                            fontSize: 10,
-                          }}
-                        >
-                          <input
-                            type="radio"
-                            name={`rh-${ctx.node.id}-${field.key}`}
-                            checked={checked}
-                            onChange={() => changeValue(field, option.value)}
-                            style={{ margin: 0 }}
-                          />
-                          <span>{option.label}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )
-                : (
-                  <select value={String(value ?? "")} onChange={(event) => {
-                    const option = field.options.find((item) => String(item.value) === event.target.value);
-                    changeValue(field, option?.value ?? event.target.value);
-                  }} style={{ ...inputStyle, height: 30, padding: "0 7px" }}>
-                    {field.options.map((option) => <option key={JSON.stringify(option.value)} value={String(option.value)}>{option.label}</option>)}
-                  </select>
-                )
-            ) : null}
-            {!bindingId && field.kind === "boolean" ? (
-              <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 10 }}>
-                <input type="checkbox" checked={Boolean(value)} onChange={(event) => changeValue(field, event.target.checked)} />
-                {Boolean(value) ? "开启" : "关闭"}
-              </label>
-            ) : null}
-            {!bindingId && (field.kind === "int" || field.kind === "float") ? (
-              <input
-                type="number"
-                value={typeof value === "number" || typeof value === "string" ? value : ""}
-                min={field.minimum ?? undefined}
-                max={field.maximum ?? undefined}
-                step={field.step ?? (field.kind === "int" ? 1 : "any")}
-                onChange={(event) => changeValue(field, field.kind === "int" ? Math.trunc(Number(event.target.value)) : Number(event.target.value))}
-                style={{ ...inputStyle, height: 30, padding: "0 8px" }}
-              />
-            ) : null}
-            {!bindingId && field.kind === "text" ? (
+          ) : null}
+          {field.kind === "boolean" ? (
+            <select value={Boolean(value) ? "true" : "false"} onChange={(event) => changeValue(field, event.target.value === "true")} style={{ ...inputStyle, height: 32, padding: "0 8px" }}>
+              <option value="true">开启</option>
+              <option value="false">关闭</option>
+            </select>
+          ) : null}
+          {field.kind === "int" || field.kind === "float" ? (
+            <input
+              type="number"
+              value={typeof value === "number" || typeof value === "string" ? value : ""}
+              min={field.minimum ?? undefined}
+              max={field.maximum ?? undefined}
+              step={field.step ?? (field.kind === "int" ? 1 : "any")}
+              onChange={(event) => changeValue(field, field.kind === "int" ? Math.trunc(Number(event.target.value)) : Number(event.target.value))}
+              style={{ ...inputStyle, height: 32, padding: "0 8px" }}
+            />
+          ) : null}
+          {field.kind === "text" ? (
+            bindingId ? (
+              <div style={{ minHeight: 52, display: "flex", alignItems: "center", padding: "7px 9px", border: `1px dashed #22c55e`, borderRadius: 8, background: ctx.theme.node.fill, fontSize: 10, color: ctx.theme.node.text }}>
+                {boundNode ? `${bindingModes[field.key] === "manual" ? "手动" : "自动"} · ${boundNode.title}` : "绑定节点不存在"}
+              </div>
+            ) : (
               <textarea
                 value={String(value ?? "")}
                 onChange={(event) => changeValue(field, event.target.value)}
-                rows={Math.min(6, Math.max(2, String(value ?? "").length > 100 ? 4 : 2))}
-                style={{ ...inputStyle, resize: "vertical", padding: 8, lineHeight: 1.45 }}
+                rows={3}
+                style={{ ...inputStyle, minHeight: 56, resize: "none", padding: 8, lineHeight: 1.45 }}
               />
-            ) : null}
-            {bindingId ? <div style={{ fontSize: 9, color: ctx.theme.node.muted }}>运行时读取绑定节点的文本内容</div> : null}
-          </>
-        )}
+            )
+          ) : null}
+        </div>
+
+        {bindable ? <div style={{ minWidth: 0 }}>{bindingSelect(field, true)}</div> : null}
       </div>
     );
   };
@@ -784,6 +887,9 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
       );
     }
 
+    const mediaFields = selectedApp.fields.filter((field) => field.kind === "image" || field.kind === "video" || field.kind === "audio");
+    const normalFields = selectedApp.fields.filter((field) => field.kind !== "image" && field.kind !== "video" && field.kind !== "audio");
+
     return (
       <div style={{ display: "grid", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -794,7 +900,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
             </div>
           </div>
           <Button compact onClick={() => {
-            ctx.updateMetadata({ rhApp: null, rhValues: {}, rhBindings: {}, rhUploadNames: {} });
+            ctx.updateMetadata({ rhApp: null, rhValues: {}, rhBindings: {}, rhBindingModes: {} });
             ctx.updateNode({ title: "RunningHub" });
             setPendingRefresh(null);
           }}>更换</Button>
@@ -813,9 +919,29 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
           <span style={{ fontSize: 9, color: ctx.theme.node.muted }}>ID {selectedApp.webAppId}</span>
         </div>
 
-        <div style={{ display: "grid", gap: 7 }}>
-          {selectedApp.fields.map(renderField)}
-        </div>
+        {mediaFields.length ? (
+          <section style={{ display: "grid", gap: 7 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 2px" }}>
+              <strong style={{ fontSize: 10.5 }}>媒体输入</strong>
+              <span style={{ fontSize: 9, color: ctx.theme.node.muted }}>新连线按参数顺序自动匹配</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, paddingLeft: 6 }}>
+              {mediaFields.map(renderMediaField)}
+            </div>
+          </section>
+        ) : null}
+
+        {normalFields.length ? (
+          <section style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 2px" }}>
+              <strong style={{ fontSize: 10.5 }}>生成参数</strong>
+              <span style={{ fontSize: 9, color: ctx.theme.node.muted }}>文本参数也支持连线自动匹配</span>
+            </div>
+            <div style={{ display: "grid", gap: 6, paddingLeft: 6 }}>
+              {normalFields.map(renderNormalField)}
+            </div>
+          </section>
+        ) : null}
 
         <div style={{ ...sectionStyle, display: "grid", gap: 7 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -870,15 +996,15 @@ export const runningHubNode: CanvasNodeDefinition = {
   type: "node-pack:runninghub",
   title: "RunningHub",
   icon: "☁️",
-  description: "拉取、保存并运行 RunningHub AI 应用。支持动态参数、应用库、媒体上传和任务结果输出。",
-  defaultSize: { width: 500, height: 620 },
+  description: "拉取、保存并运行 RunningHub AI 应用。支持动态参数、应用库、按连线顺序自动匹配和任务结果输出。",
+  defaultSize: { width: 560, height: 520 },
   defaultMetadata: {
     content: "",
     status: "idle",
     rhApp: null,
     rhValues: {},
     rhBindings: {},
-    rhUploadNames: {},
+    rhBindingModes: {},
     rhTaskId: "",
     rhTaskStatus: "",
     rhOutputKind: "",
