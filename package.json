@@ -1,6 +1,6 @@
 {
   "name": "infinite-canvas-node-pack",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": false,
   "type": "module",
   "description": "A modular multi-node plugin pack for Infinite Canvas.",

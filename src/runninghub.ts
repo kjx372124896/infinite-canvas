@@ -559,6 +559,28 @@ export async function startRunningHubTask(
   return { taskId, status: cleanText(result?.data?.taskStatus || "QUEUED", 40).toUpperCase() };
 }
 
+export async function cancelRunningHubTask(
+  site: RunningHubSite,
+  apiKey: string,
+  taskId: string,
+  signal?: AbortSignal,
+) {
+  const safeTaskId = safeId(taskId, "任务 ID");
+  const result = requireSuccess(await fetchJson(`${RUNNINGHUB_BASE_URL[site]}/task/openapi/cancel`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ apiKey: apiKey.trim(), taskId: safeTaskId }),
+    signal,
+  }, 30_000));
+  return {
+    taskId: safeTaskId,
+    message: cleanText(result?.msg || "success", 120),
+  };
+}
+
 function normalizeOutputs(raw: unknown): RunningHubOutput[] {
   if (!Array.isArray(raw)) return [];
   return raw.slice(0, 50).map((item: any) => {

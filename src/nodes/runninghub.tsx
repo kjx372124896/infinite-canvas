@@ -3,6 +3,7 @@ import type { CanvasNodeContentProps, CanvasNodeData, CanvasNodeDefinition } fro
 
 import {
   blobFromCanvasNode,
+  cancelRunningHubTask,
   canvasNodeResourceKind,
   deleteRunningHubApp,
   fetchRunningHubApp,
@@ -120,7 +121,9 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const [libraryCategory, setLibraryCategory] = useState<"all" | RunningHubCategory>("all");
   const [pendingRefresh, setPendingRefresh] = useState<RunningHubSavedApp | null>(null);
   const [taskState, setTaskState] = useState<RunningHubTaskState | null>(null);
+  const [cancellingTask, setCancellingTask] = useState(false);
   const runControllerRef = useRef<AbortController | null>(null);
+  const remoteCancelConfirmedRef = useRef(false);
   const seenConnectionIdsRef = useRef<Set<string>>(new Set());
   const manualConnectionSourcesRef = useRef<Set<string>>(new Set());
 
@@ -493,12 +496,13 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const run = async () => {
     if (!selectedApp) return;
     clearMessages();
+    remoteCancelConfirmedRef.current = false;
     runControllerRef.current?.abort();
     const controller = new AbortController();
     runControllerRef.current = controller;
     setBusy("run");
     setTaskState({ state: "pending", status: "PREPARING", outputs: [] });
-    ctx.updateMetadata({ rhError: "", rhTaskStatus: "PREPARING" });
+    ctx.updateMetadata({ rhTaskId: "", rhError: "", rhTaskStatus: "PREPARING" });
     try {
       const apiKey = await getRunningHubCredential(ctx.storage, selectedApp.site);
       if (!apiKey) {
@@ -527,8 +531,13 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
       setNotice("RunningHub 任务完成，结果已添加到画布");
     } catch (e) {
       if (controller.signal.aborted) {
-        setNotice("已停止本地查询；RunningHub 云端任务可能仍在继续");
-        ctx.updateMetadata({ rhTaskStatus: "POLLING_STOPPED" });
+        if (remoteCancelConfirmedRef.current) {
+          setNotice("RunningHub 已确认取消任务");
+          ctx.updateMetadata({ rhTaskStatus: "CANCELLED", rhError: "" });
+        } else {
+          setNotice("已停止本地查询；RunningHub 云端任务可能仍在继续");
+          ctx.updateMetadata({ rhTaskStatus: "POLLING_STOPPED" });
+        }
       } else {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
@@ -543,6 +552,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const resume = async () => {
     if (!selectedApp || !lastTaskId) return;
     clearMessages();
+    remoteCancelConfirmedRef.current = false;
     const controller = new AbortController();
     runControllerRef.current = controller;
     setBusy("run");
@@ -576,6 +586,40 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   };
 
   const stop = () => runControllerRef.current?.abort();
+
+  const cancelRemoteTask = async () => {
+    if (!selectedApp || !lastTaskId || cancellingTask) return;
+    const confirmed = window.confirm(
+      "确定要终止 RunningHub 任务 " + lastTaskId + "？\n\n这会真正取消云端任务，不只是停止本地查询。",
+    );
+    if (!confirmed) return;
+    clearMessages();
+    setCancellingTask(true);
+    try {
+      const apiKey = await getRunningHubCredential(ctx.storage, selectedApp.site);
+      if (!apiKey) {
+        setHasCredential((old) => ({ ...old, [selectedApp.site]: false }));
+        throw new Error(
+          "RunningHub "
+          + (selectedApp.site === "cn" ? "国内站" : "国际站")
+          + "尚未保存 API Key，无法取消任务",
+        );
+      }
+      await cancelRunningHubTask(selectedApp.site, apiKey, lastTaskId);
+      remoteCancelConfirmedRef.current = true;
+      ctx.updateMetadata({ rhTaskStatus: "CANCELLED", rhError: "" });
+      setTaskState(null);
+      setError("");
+      runControllerRef.current?.abort();
+      setNotice("RunningHub 已确认取消任务 " + lastTaskId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      ctx.updateMetadata({ rhError: msg });
+    } finally {
+      setCancellingTask(false);
+    }
+  };
 
   const inputStyle = {
     width: "100%",
@@ -968,7 +1012,12 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
         <div style={{ ...sectionStyle, display: "grid", gap: 7 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             {busy === "run" ? <Button danger onClick={stop}>停止查询</Button> : <Button onClick={() => void run()}>▶ 生成</Button>}
-            {busy !== "run" && lastTaskId && !["SUCCESS", "COMPLETED"].includes(lastStatus) ? <Button compact onClick={() => void resume()}>继续查询</Button> : null}
+            {busy !== "run" && lastTaskId && !["SUCCESS", "COMPLETED", "FAILED", "ERROR", "CANCELLED", "CANCELED"].includes(lastStatus) ? <Button compact onClick={() => void resume()}>继续查询</Button> : null}
+            {lastTaskId && !["SUCCESS", "COMPLETED", "FAILED", "ERROR", "CANCELLED", "CANCELED"].includes(lastStatus) ? (
+              <Button danger compact disabled={cancellingTask} onClick={() => void cancelRemoteTask()}>
+                {cancellingTask ? "正在取消…" : "取消任务"}
+              </Button>
+            ) : null}
           </div>
           {(taskState || lastStatus || lastTaskId) ? (
             <div style={{ fontSize: 9, color: ctx.theme.node.muted, lineHeight: 1.5 }}>
