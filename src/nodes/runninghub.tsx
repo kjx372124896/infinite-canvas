@@ -996,6 +996,7 @@ export const runningHubNode: CanvasNodeDefinition = {
   icon: "☁️",
   description: "拉取、保存并运行 RunningHub AI 应用。支持动态参数、应用库、按连线顺序自动匹配和任务结果输出。",
   defaultSize: { width: 560, height: 520 },
+  hidePanel: true,
   defaultMetadata: {
     content: "",
     status: "idle",
