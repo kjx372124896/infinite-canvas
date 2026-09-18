@@ -1,0 +1,18 @@
+{
+  "name": "infinite-canvas-node-pack",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "A modular multi-node plugin pack for Infinite Canvas.",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@infinite-canvas/plugin-sdk": "file:./sdk",
+    "@types/react": "19.1.12",
+    "esbuild": "^0.25.0",
+    "typescript": "^5"
+  }
+}
