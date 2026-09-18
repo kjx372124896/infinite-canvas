@@ -140,6 +140,7 @@ export type CanvasPlugin = {
     name: string;
     version: string;
     description?: string;
+    updateUrl?: string; // Optional stable remote source used for one-click updates when a local bootstrap copy is discovered.
     minAppVersion?: string;
     css?: string; // Injected when enabled and removed when uninstalled or disabled.
     nodes: CanvasNodeDefinition[];

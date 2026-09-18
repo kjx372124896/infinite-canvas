@@ -112,7 +112,9 @@ export async function ensurePluginsLoaded() {
     await loadDevPlugins();
 }
 
-// Discover local plugins from web/public/plugins, add them disabled, and expose them in the manager without a URL.
+// Discover local plugins from web/public/plugins. Pure local plugins stay in the local tab; a
+// plugin may declare updateUrl to use its local build only as a bootstrap while retaining a
+// stable remote update source and third-party classification.
 // Refresh metadata and source for existing records while preserving the enabled flag so persisted versions stay current.
 async function loadLocalPlugins() {
     let urls: unknown;
@@ -131,15 +133,20 @@ async function loadLocalPlugins() {
                 const source = await fetchPluginSource(withCacheBust(url));
                 const plugin = await evaluatePluginSource(source);
                 const existing = store.plugins.find((item) => item.id === plugin.id);
+                const updateUrl = typeof plugin.updateUrl === "string" ? plugin.updateUrl.trim() : "";
+                // Persisted remote installs (official or third-party) take precedence over
+                // development copies discovered from web/public/plugins. Local build output can
+                // share the same plugin id and must never overwrite its update URL/version.
+                if (existing && !existing.local) return;
                 store.upsert({
                     id: plugin.id,
                     name: plugin.name || plugin.id,
                     version: plugin.version || "0.0.0",
                     description: plugin.description,
-                    url,
+                    url: updateUrl || url,
                     source,
                     enabled: existing?.enabled ?? false, // Preserve the user setting; new discoveries default to disabled.
-                    local: true,
+                    local: !updateUrl,
                 });
             } catch (error) {
                 console.error(`[plugin] Failed to discover local plugin: ${url}`, error);
