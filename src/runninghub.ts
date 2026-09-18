@@ -424,6 +424,8 @@ export async function saveRunningHubCredential(storage: PluginStorage, site: Run
   const key = apiKey.trim();
   if (!key) throw new Error("API Key 不能为空");
   await storage.set(credentialKey(site), key);
+  const persisted = (await storage.get<string>(credentialKey(site)))?.trim() || "";
+  if (persisted !== key) throw new Error("API Key 保存失败，请重试");
 }
 
 export async function getRunningHubCredential(storage: PluginStorage, site: RunningHubSite) {

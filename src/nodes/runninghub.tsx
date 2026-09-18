@@ -110,7 +110,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const [site, setSite] = useState<RunningHubSite>("cn");
   const [reference, setReference] = useState("");
   const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [hasCredential, setHasCredential] = useState<Record<RunningHubSite, boolean>>({ cn: false, global: false });
+  const [hasCredential, setHasCredential] = useState<Record<RunningHubSite, boolean | null>>({ cn: null, global: null });
   const [credentialNote, setCredentialNote] = useState("");
   const [previewApp, setPreviewApp] = useState<RunningHubSavedApp | null>(null);
   const [busy, setBusy] = useState("");
@@ -130,6 +130,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const bindingModes = objectMetadata<BindingModes>(ctx.node.metadata?.rhBindingModes, {});
   const lastTaskId = stringMetadata(ctx.node.metadata?.rhTaskId);
   const lastStatus = stringMetadata(ctx.node.metadata?.rhTaskStatus);
+  const persistedError = stringMetadata(ctx.node.metadata?.rhError);
   const upstream = ctx.getUpstream();
   const allNodes = ctx.getNodes();
   const incomingConnections = ctx.getConnections().filter((connection) => connection.toNodeId === ctx.node.id);
@@ -242,6 +243,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const clearMessages = () => {
     setError("");
     setNotice("");
+    if (ctx.node.metadata?.rhError) ctx.updateMetadata({ rhError: "" });
   };
 
   const selectApp = async (app: RunningHubSavedApp) => {
@@ -255,6 +257,7 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
       rhBindingModes: {},
       rhTaskId: "",
       rhTaskStatus: "",
+      rhError: "",
       rhOutputKind: "",
       content: "",
       status: "idle",
@@ -476,14 +479,14 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   const observeTask = async (taskId: string, apiKey: string, controller: AbortController) => {
     const terminal = await pollRunningHubTask(selectedApp!.site, apiKey, taskId, (state) => {
       setTaskState(state);
-      ctx.updateMetadata({ rhTaskStatus: state.status, status: state.state === "pending" ? "loading" : state.state === "success" ? "success" : "error" });
+      ctx.updateMetadata({ rhTaskStatus: state.status });
     }, controller.signal);
     if (terminal.state === "failed") {
-      ctx.updateMetadata({ status: "error", errorDetails: terminal.reason, rhTaskStatus: terminal.status });
+      ctx.updateMetadata({ rhError: terminal.reason, rhTaskStatus: terminal.status });
       throw new Error(terminal.reason);
     }
     publishOutputs(terminal.outputs, taskId);
-    ctx.updateMetadata({ status: "success", errorDetails: "", rhTaskStatus: terminal.status });
+    ctx.updateMetadata({ rhError: "", rhTaskStatus: terminal.status });
     return terminal;
   };
 
@@ -495,10 +498,14 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     runControllerRef.current = controller;
     setBusy("run");
     setTaskState({ state: "pending", status: "PREPARING", outputs: [] });
-    ctx.updateMetadata({ status: "loading", errorDetails: "", rhTaskStatus: "PREPARING" });
+    ctx.updateMetadata({ rhError: "", rhTaskStatus: "PREPARING" });
     try {
       const apiKey = await getRunningHubCredential(ctx.storage, selectedApp.site);
-      if (!apiKey) throw new Error("请先配置该站点的 API Key");
+      if (!apiKey) {
+        setHasCredential((old) => ({ ...old, [selectedApp.site]: false }));
+        throw new Error(`RunningHub ${selectedApp.site === "cn" ? "国内站" : "国际站"}尚未保存 API Key，请先配置后再运行`);
+      }
+      setHasCredential((old) => ({ ...old, [selectedApp.site]: true }));
       const nodeInfoList = [];
       for (const field of selectedApp.fields) {
         const fieldValue = await resolveFieldValue(field, apiKey, controller.signal);
@@ -521,11 +528,11 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     } catch (e) {
       if (controller.signal.aborted) {
         setNotice("已停止本地查询；RunningHub 云端任务可能仍在继续");
-        ctx.updateMetadata({ status: "idle", rhTaskStatus: "POLLING_STOPPED" });
+        ctx.updateMetadata({ rhTaskStatus: "POLLING_STOPPED" });
       } else {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
-        ctx.updateMetadata({ status: "error", errorDetails: msg });
+        ctx.updateMetadata({ rhError: msg });
       }
     } finally {
       if (runControllerRef.current === controller) runControllerRef.current = null;
@@ -541,19 +548,27 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     setBusy("run");
     try {
       const apiKey = await getRunningHubCredential(ctx.storage, selectedApp.site);
-      if (!apiKey) throw new Error("请先配置该站点的 API Key");
+      if (!apiKey) {
+        setHasCredential((old) => ({ ...old, [selectedApp.site]: false }));
+        throw new Error(`RunningHub ${selectedApp.site === "cn" ? "国内站" : "国际站"}尚未保存 API Key，请先配置后再继续查询`);
+      }
+      setHasCredential((old) => ({ ...old, [selectedApp.site]: true }));
       const first = await queryRunningHubTask(selectedApp.site, apiKey, lastTaskId, controller.signal);
       setTaskState(first);
       if (first.state === "success") {
         publishOutputs(first.outputs, lastTaskId);
-        ctx.updateMetadata({ status: "success", rhTaskStatus: first.status });
+        ctx.updateMetadata({ rhError: "", rhTaskStatus: first.status });
       } else if (first.state === "failed") {
         throw new Error(first.reason);
       } else {
         await observeTask(lastTaskId, apiKey, controller);
       }
     } catch (e) {
-      if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!controller.signal.aborted) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        ctx.updateMetadata({ rhError: msg });
+      }
     } finally {
       if (runControllerRef.current === controller) runControllerRef.current = null;
       setBusy("");
@@ -916,6 +931,13 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
 
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <Button compact disabled={busy === `refresh:${selectedApp.id}`} onClick={() => void refreshAppSchema(selectedApp)}>{busy === `refresh:${selectedApp.id}` ? "刷新中…" : "刷新应用"}</Button>
+          <Button compact onClick={() => {
+            setSite(selectedApp.site);
+            setView("add");
+          }}>配置 API Key</Button>
+          <span style={{ fontSize: 9, color: hasCredential[selectedApp.site] === true ? "#16a34a" : hasCredential[selectedApp.site] === false ? "#ef4444" : ctx.theme.node.muted }}>
+            Key：{hasCredential[selectedApp.site] === null ? "检查中…" : hasCredential[selectedApp.site] ? "已配置" : "未配置"}
+          </span>
           <span style={{ fontSize: 9, color: ctx.theme.node.muted }}>ID {selectedApp.webAppId}</span>
         </div>
 
@@ -980,10 +1002,22 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
     >
       {view === "add" ? renderAdd() : view === "library" ? renderLibrary() : renderMain()}
       {notice ? <div style={{ marginTop: 8, padding: "7px 9px", borderRadius: 8, background: "#22c55e18", color: "#16a34a", fontSize: 10, lineHeight: 1.45 }}>{notice}</div> : null}
-      {error ? <div style={{ marginTop: 8, padding: "7px 9px", borderRadius: 8, background: "#ef444418", color: "#ef4444", fontSize: 10, lineHeight: 1.45 }}>{error}</div> : null}
-      {selectedApp && !hasCredential[selectedApp.site] ? (
-        <div style={{ marginTop: 8, padding: "7px 9px", borderRadius: 8, background: "#f59e0b18", color: "#d97706", fontSize: 10 }}>
-          当前站点尚未配置 API Key。请进入“更换 → 添加应用”配置。
+      {(error || persistedError) ? (
+        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 9px", borderRadius: 8, background: "#ef444418", color: "#ef4444", fontSize: 10, lineHeight: 1.45 }}>
+          <span style={{ flex: 1 }}>{error || persistedError}</span>
+          <Button compact danger onClick={() => {
+            setError("");
+            ctx.updateMetadata({ rhError: "" });
+          }}>关闭</Button>
+        </div>
+      ) : null}
+      {selectedApp && hasCredential[selectedApp.site] === false ? (
+        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, background: "#f59e0b18", color: "#d97706", fontSize: 10 }}>
+          <span style={{ flex: 1 }}>RunningHub {selectedApp.site === "cn" ? "国内站" : "国际站"}尚未保存 API Key。</span>
+          <Button compact onClick={() => {
+            setSite(selectedApp.site);
+            setView("add");
+          }}>去配置</Button>
         </div>
       ) : null}
     </div>
@@ -1006,6 +1040,7 @@ export const runningHubNode: CanvasNodeDefinition = {
     rhBindingModes: {},
     rhTaskId: "",
     rhTaskStatus: "",
+    rhError: "",
     rhOutputKind: "",
   },
   minimapColor: "#22c55e",
