@@ -98,6 +98,30 @@ codex mcp add infinite-canvas -- node /path/to/infinite-canvas/canvas-agent/dist
 
 Canvas Agent 源码使用 TypeScript 编写，MCP 协议层使用官方 `@modelcontextprotocol/sdk`，工具入参使用 `zod` 描述。
 
+## 网页版 ChatGPT Remote MCP
+
+Canvas Agent `0.7.0+` 新增独立的 Streamable HTTP MCP。它只增加远程传输层，不替换、不修改现有 Codex app-server 或 `canvas-agent mcp` stdio 模式。
+
+先保持正常的 Canvas Agent 服务运行，然后在第二个终端启动：
+
+```bash
+npx -y @basketikun/canvas-agent@latest remote
+```
+
+本仓库开发时也可以运行：
+
+```bash
+npm run dev:remote
+```
+
+默认 MCP 地址为 `http://127.0.0.1:17372/mcp`。Remote MCP 默认复用 Canvas Agent Connect token，支持 Bearer Header、`x-canvas-agent-token` Header 和 `?token=` 查询参数。
+
+推荐网页版 ChatGPT 使用 OpenAI Secure MCP Tunnel，只把这个 MCP 端点交给隧道，不要直接暴露 `17371` 的 Canvas Agent API。启动 `remote` 后终端会打印可给 tunnel-client 使用的本机目标地址。
+
+在网页版 ChatGPT 开发者模式中创建 MCP/插件连接时，在「连接」里选择「隧道」，再选择对应的 `tunnel_id`。这样 ChatGPT 使用的仍然是同一套 `canvas_*` 工具，而画布操作继续由本机 Canvas Agent 执行。
+
+可用环境变量：`CANVAS_MCP_HOST`、`CANVAS_MCP_PORT`、`CANVAS_MCP_PATH`、`CANVAS_MCP_TOKEN`。默认只监听回环地址；若自行公开到互联网，应使用符合 MCP/ChatGPT 要求的 OAuth，而不是只依赖 URL token。
+
 如果希望终端里的 Codex 不被 MCP 审批卡住，可以在 `~/.codex/config.toml` 里给这个 MCP 设置自动放行：
 
 ```toml

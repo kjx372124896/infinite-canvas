@@ -1,6 +1,6 @@
 {
   "name": "@basketikun/canvas-agent",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,10 +15,12 @@
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:remote": "tsx src/index.ts remote",
     "debug": "tsx src/index.ts --debug",
-    "test": "tsx --test src/config.test.ts src/canvas/operations.test.ts src/canvas/session.test.ts src/agent/codex-client.test.ts src/agent/codex-history.test.ts src/agent/message-metadata.test.ts src/skills/store.test.ts src/utils/agent-runtime.test.ts",
+    "test": "tsx --test src/config.test.ts src/canvas/operations.test.ts src/canvas/session.test.ts src/agent/codex-client.test.ts src/agent/codex-history.test.ts src/agent/message-metadata.test.ts src/server/mcp-http.test.ts src/skills/store.test.ts src/utils/agent-runtime.test.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "remote": "node dist/index.js remote",
     "prepack": "npm run build"
   },
   "dependencies": {

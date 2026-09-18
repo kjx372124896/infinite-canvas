@@ -9,9 +9,15 @@ type CanvasAgentToolResponse = { ok?: boolean; result?: unknown; error?: string 
 /** 启动通过标准输入输出通信的 MCP 服务。 */
 export async function startMcpServer() {
     const config = loadConfig(true);
+    const server = createCanvasMcpServer(config);
+    await server.connect(new StdioServerTransport());
+}
+
+/** 创建一份共享同一套画布工具定义的 MCP Server，供 stdio / HTTP transport 复用。 */
+export function createCanvasMcpServer(config: CanvasAgentConfig) {
     const server = new McpServer({ name: "canvas-agent", version: VERSION }, { instructions: AGENT_PROMPT });
     toolNames.forEach((name) => registerCanvasTool(server, config, name));
-    await server.connect(new StdioServerTransport());
+    return server;
 }
 
 /** 向 MCP Server 注册单个 Canvas Agent 工具。 */
