@@ -15,13 +15,13 @@
 ### GitHub Raw
 
 ```text
-https://raw.githubusercontent.com/kjx372124896/infinite-canvas-node-pack/main/dist/infinite-canvas-node-pack.js
+https://raw.githubusercontent.com/kjx372124896/infinite-canvas/infinite-canvas-node-pack/dist/infinite-canvas-node-pack.js
 ```
 
 ### jsDelivr（推荐）
 
 ```text
-https://cdn.jsdelivr.net/gh/kjx372124896/infinite-canvas-node-pack@main/dist/infinite-canvas-node-pack.js
+https://cdn.jsdelivr.net/gh/kjx372124896/infinite-canvas@infinite-canvas-node-pack/dist/infinite-canvas-node-pack.js
 ```
 
 ## 开发
