@@ -7,6 +7,7 @@ export default definePlugin({
   name: "Infinite Canvas 节点包",
   version: "0.3.5",
   description: "可持续扩展的多节点插件包。当前首个正式节点为 RunningHub AI 应用工作流节点。",
+  updateUrl: "https://cdn.jsdelivr.net/gh/kjx372124896/infinite-canvas@infinite-canvas-node-pack/dist/infinite-canvas-node-pack.js",
   nodes: [
     runningHubNode
   ]

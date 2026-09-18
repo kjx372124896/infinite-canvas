@@ -322,6 +322,7 @@ export type CanvasPlugin = {
     name: string;
     version: string;
     description?: string;
+    updateUrl?: string; // 可选稳定远程地址；本地开发副本被发现时可自动迁移为可更新的第三方插件
     minAppVersion?: string;
     css?: string; // 插件样式,启用时自动注入、卸载/禁用时自动清理
     nodes: CanvasNodeDefinition[];
