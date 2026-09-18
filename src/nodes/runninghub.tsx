@@ -569,12 +569,52 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
               </select>
             ) : null}
             {!bindingId && field.kind === "select" ? (
-              <select value={String(value ?? "")} onChange={(event) => {
-                const option = field.options.find((item) => String(item.value) === event.target.value);
-                changeValue(field, option?.value ?? event.target.value);
-              }} style={{ ...inputStyle, height: 30, padding: "0 7px" }}>
-                {field.options.map((option) => <option key={JSON.stringify(option.value)} value={String(option.value)}>{option.label}</option>)}
-              </select>
+              field.options.length > 0
+              && field.options.length <= 10
+              && field.options.every((option) => option.label.length <= 48)
+                ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {field.options.map((option) => {
+                      const checked = Object.is(value, option.value) || String(value ?? "") === String(option.value);
+                      return (
+                        <label
+                          key={JSON.stringify(option.value)}
+                          title={option.description || option.label}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
+                            minHeight: 28,
+                            padding: "4px 8px",
+                            border: `1px solid ${checked ? ctx.theme.toolbar.activeText : ctx.theme.node.stroke}`,
+                            borderRadius: 8,
+                            background: checked ? ctx.theme.toolbar.activeBg : ctx.theme.node.panel,
+                            color: checked ? ctx.theme.toolbar.activeText : ctx.theme.node.text,
+                            cursor: "pointer",
+                            fontSize: 10,
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name={`rh-${ctx.node.id}-${field.key}`}
+                            checked={checked}
+                            onChange={() => changeValue(field, option.value)}
+                            style={{ margin: 0 }}
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )
+                : (
+                  <select value={String(value ?? "")} onChange={(event) => {
+                    const option = field.options.find((item) => String(item.value) === event.target.value);
+                    changeValue(field, option?.value ?? event.target.value);
+                  }} style={{ ...inputStyle, height: 30, padding: "0 7px" }}>
+                    {field.options.map((option) => <option key={JSON.stringify(option.value)} value={String(option.value)}>{option.label}</option>)}
+                  </select>
+                )
             ) : null}
             {!bindingId && field.kind === "boolean" ? (
               <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 10 }}>
@@ -795,7 +835,14 @@ function RunningHubContent({ ctx }: CanvasNodeContentProps) {
   return (
     <div
       data-canvas-no-zoom
-      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("input,textarea,select,button,label,[data-rh-interactive]")) event.stopPropagation();
+      }}
+      onMouseDown={(event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("input,textarea,select,button,label,[data-rh-interactive]")) event.stopPropagation();
+      }}
       onWheel={(event) => event.stopPropagation()}
       style={{
         width: "100%",

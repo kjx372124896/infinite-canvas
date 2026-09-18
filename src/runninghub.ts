@@ -167,19 +167,36 @@ function parseFieldData(raw: unknown): unknown {
 function fieldDataSettings(raw: unknown) {
   const decoded = parseFieldData(raw);
   if (!Array.isArray(decoded)) return decoded && typeof decoded === "object" ? decoded as Record<string, unknown> : {};
-  const objects = decoded.filter((item) => item && typeof item === "object" && !Array.isArray(item)) as Record<string, unknown>[];
-  return objects.find((item) => "default" in item && !("index" in item) && !("value" in item)) || {};
+  const settings = decoded[1];
+  return settings && typeof settings === "object" && !Array.isArray(settings)
+    ? settings as Record<string, unknown>
+    : {};
 }
 
 function fieldOptions(raw: any): RunningHubOption[] {
   const decoded = parseFieldData(raw?.fieldData);
+  const fieldDataOptions = Array.isArray(decoded)
+    && decoded.length >= 2
+    && decoded[1]
+    && typeof decoded[1] === "object"
+    && !Array.isArray(decoded[1])
+    ? decoded[1] as Record<string, unknown>
+    : decoded;
+  const typeTokens = new Set(["STRING", "BOOLEAN", "BOOL", "INT", "INTEGER", "FLOAT", "DOUBLE", "NUMBER", "IMAGE", "VIDEO", "AUDIO", "COMBO", "SELECT", "LIST", "ENUM"]);
+  const decodedArrayIsTypeDescriptor = Array.isArray(fieldDataOptions)
+    && typeof fieldDataOptions[0] === "string"
+    && typeTokens.has(String(fieldDataOptions[0]).toUpperCase());
   const sources = [
     raw?.options,
     raw?.choices,
     raw?.values,
     raw?.list,
-    Array.isArray(decoded) ? decoded : null,
-    decoded && typeof decoded === "object" && !Array.isArray(decoded) ? (decoded as any).options : null,
+    fieldDataOptions && typeof fieldDataOptions === "object" && !Array.isArray(fieldDataOptions) ? (fieldDataOptions as any).options : null,
+    fieldDataOptions && typeof fieldDataOptions === "object" && !Array.isArray(fieldDataOptions) ? (fieldDataOptions as any).choices : null,
+    fieldDataOptions && typeof fieldDataOptions === "object" && !Array.isArray(fieldDataOptions) ? (fieldDataOptions as any).values : null,
+    fieldDataOptions && typeof fieldDataOptions === "object" && !Array.isArray(fieldDataOptions) ? (fieldDataOptions as any).list : null,
+    Array.isArray(fieldDataOptions) && !decodedArrayIsTypeDescriptor ? fieldDataOptions : null,
+    Array.isArray((decoded as any)?.[0]) ? (decoded as any)[0] : null,
   ];
   const list = sources.find(Array.isArray) as unknown[] | undefined;
   if (!list) return [];
@@ -195,8 +212,8 @@ function fieldOptions(raw: any): RunningHubOption[] {
       label = String(item);
     } else if (item && typeof item === "object" && !Array.isArray(item)) {
       const obj = item as any;
-      value = obj.index ?? obj.value ?? obj.id ?? obj.name ?? obj.label;
-      label = cleanText(obj.name ?? obj.label ?? obj.description ?? value, 160);
+      value = obj.value ?? obj.id ?? obj.index ?? obj.key ?? obj.name ?? obj.label;
+      label = cleanText(obj.label ?? obj.name ?? obj.title ?? obj.description ?? value, 160);
       description = cleanText(obj.description, 500);
     }
     if (!["string", "number", "boolean"].includes(typeof value)) continue;
@@ -209,6 +226,10 @@ function fieldOptions(raw: any): RunningHubOption[] {
 }
 
 function inferFieldKind(raw: any, options: RunningHubOption[]): RunningHubFieldKind {
+  const settings = fieldDataSettings(raw?.fieldData) as any;
+  if (settings?.image_upload === true || raw?.image_upload === true) return "image";
+  if (settings?.video_upload === true || raw?.video_upload === true) return "video";
+  if (settings?.audio_upload === true || raw?.audio_upload === true) return "audio";
   const declared = `${raw?.fieldType || ""} ${raw?.valueType || ""}`.toLowerCase();
   const name = String(raw?.fieldName || raw?.name || "").toLowerCase();
   const description = `${raw?.description || ""} ${raw?.label || ""}`.toLowerCase();
@@ -271,7 +292,7 @@ function projectFields(rawFields: any[]): RunningHubField[] {
       key,
       nodeId,
       fieldName,
-      label: cleanText(raw?.label || raw?.description || raw?.name || fieldName, 160) || fieldName,
+      label: cleanText(raw?.label || raw?.name || raw?.description || fieldName, 160) || fieldName,
       description: cleanText(raw?.description, 600),
       kind,
       required: raw?.required === true || settings?.required === true,
