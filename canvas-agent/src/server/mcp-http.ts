@@ -42,7 +42,10 @@ export async function startRemoteMcpServer() {
 
 /** 构造可测试、可嵌入的 Remote MCP Express 应用。 */
 export function createRemoteMcpApp(config: CanvasAgentConfig, token: string, host = "127.0.0.1", endpointPath = DEFAULT_REMOTE_MCP_PATH) {
-    const app = createMcpExpressApp({ host });
+    // The server still binds to loopback in startRemoteMcpServer(), but reverse proxies such as
+    // Cloudflare Tunnel preserve the public Host header. Passing 0.0.0.0 here disables the SDK's
+    // localhost-only Host check while token authentication remains mandatory for the MCP endpoint.
+    const app = createMcpExpressApp({ host: host === "127.0.0.1" || host === "localhost" || host === "::1" ? "0.0.0.0" : host });
 
     app.get("/health", (_req, res) => {
         res.json({
