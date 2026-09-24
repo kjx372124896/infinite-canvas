@@ -134,10 +134,20 @@ async function loadLocalPlugins() {
                 const plugin = await evaluatePluginSource(source);
                 const existing = store.plugins.find((item) => item.id === plugin.id);
                 const updateUrl = typeof plugin.updateUrl === "string" ? plugin.updateUrl.trim() : "";
-                // Persisted remote installs (official or third-party) take precedence over
-                // development copies discovered from web/public/plugins. Local build output can
-                // share the same plugin id and must never overwrite its update URL/version.
-                if (existing && !existing.local) return;
+                // Persisted remote installs (official or third-party) normally take precedence over
+                // development copies discovered from web/public/plugins. The RunningHub node pack is
+                // also kept as a local bootstrap so an accidentally overwritten cached install can be
+                // repaired without deleting the plugin's private storage (API keys/app library).
+                const isRunningHubBootstrap =
+                    plugin.id === "infinite-canvas-node-pack" &&
+                    plugin.nodes.some((node) => node.type === "node-pack:runninghub");
+                const existingHasRunningHubNode =
+                    existing?.source?.includes("node-pack:runninghub") ||
+                    existing?.source?.includes("RunningHub AI");
+                const recoverOverwrittenRunningHub =
+                    Boolean(existing && !existing.local && isRunningHubBootstrap && !existingHasRunningHubNode);
+
+                if (existing && !existing.local && !recoverOverwrittenRunningHub) return;
                 store.upsert({
                     id: plugin.id,
                     name: plugin.name || plugin.id,
@@ -147,6 +157,7 @@ async function loadLocalPlugins() {
                     source,
                     enabled: existing?.enabled ?? false, // Preserve the user setting; new discoveries default to disabled.
                     local: !updateUrl,
+                    installedAt: existing?.installedAt,
                 });
             } catch (error) {
                 console.error(`[plugin] Failed to discover local plugin: ${url}`, error);
